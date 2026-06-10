@@ -156,6 +156,10 @@ function App() {
   );
   const pendingCount = todayTodos.filter((r) => r.status === "pending").length;
   const totalCount = todayTodos.length;
+  const compactRecords = useMemo(
+    () => records.filter((record) => record.date === today).sort((a, b) => b.createdAt.localeCompare(a.createdAt)),
+    [records, today],
+  );
 
   const clearCompleted = useCallback(async function clearCompleted() {
     const doneIds = todayTodos.filter((r) => r.status === "done").map((r) => r.id);
@@ -304,7 +308,7 @@ function App() {
             <div className="brand">
               <span className="brand-mark" aria-hidden="true" />
               <div>
-                <p className="brand-label">冰霜便签</p>
+                <p className="brand-label">霜笺</p>
                 <h1>FrostNote</h1>
               </div>
             </div>
@@ -514,7 +518,7 @@ function App() {
             <div className="brand">
               <span className="brand-mark" aria-hidden="true" />
               <div>
-                <p className="brand-label">冰霜便签</p>
+                <p className="brand-label">霜笺</p>
                 <h1>FrostNote</h1>
               </div>
             </div>
@@ -522,93 +526,11 @@ function App() {
 
           <p className="compact-date">{dateLabel(today, today)} · {today}</p>
 
-          <form className="quick-input" onSubmit={addRecord}>
-            <div className="entry-toolbar">
-              <div className="segmented" aria-label="记录类型">
-                <button
-                  className={recordType === "note" ? "selected" : ""}
-                  onClick={() => setRecordType("note")}
-                  type="button"
-                >
-                  FreeNote
-                </button>
-                <button
-                  className={recordType === "todo" ? "selected" : ""}
-                  onClick={() => setRecordType("todo")}
-                  type="button"
-                >
-                  To do
-                </button>
-              </div>
-            </div>
-            <textarea
-              ref={inputRef}
-              onChange={(event) => setContent(event.target.value)}
-              placeholder="快速记录..."
-              rows={1}
-              value={content}
-            />
-            <div className="entry-actions">
-              <span>{recordType === "todo" ? "待完成事项" : "FreeNote"}</span>
-              <button className="primary-action" type="submit">
-                保存
-              </button>
-            </div>
-          </form>
-
-          <div className="controls compact-controls">
-            <input
-              aria-label="搜索记录"
-              onChange={(event) => setQuery(event.target.value)}
-              placeholder="搜索..."
-              type="search"
-              value={query}
-            />
-            <select aria-label="筛选记录" onChange={(event) => setFilter(event.target.value as FilterMode)} value={filter}>
-              <option value="all">全部</option>
-              <option value="note">FreeNote</option>
-              <option value="todo">To do</option>
-              <option value="pending">未完成</option>
-              <option value="done">已完成</option>
-            </select>
-            {todayTodos.some((r) => r.status === "done") ? (
-              <button
-                className="clear-done"
-                onClick={clearCompleted}
-                type="button"
-                title="删除当天所有已完成事项"
-              >
-                清除已完成
-              </button>
-            ) : null}
-          </div>
-
           <div className="compact-records">
-            {records
-              .filter((r) => {
-                if (r.date !== today) return false;
-                if (filter === "note") return r.type === "note";
-                if (filter === "todo") return r.type === "todo";
-                if (filter === "pending") return r.type === "todo" && r.status === "pending";
-                if (filter === "done") return r.type === "todo" && r.status === "done";
-                return true;
-              })
-              .filter((r) => r.content.toLowerCase().includes(query.trim().toLowerCase()))
-              .length === 0 ? (
+            {compactRecords.length === 0 ? (
               <p className="compact-empty">今天还没有记录</p>
             ) : (
-              records
-                .filter((r) => {
-                  if (r.date !== today) return false;
-                  if (filter === "note") return r.type === "note";
-                  if (filter === "todo") return r.type === "todo";
-                  if (filter === "pending") return r.type === "todo" && r.status === "pending";
-                  if (filter === "done") return r.type === "todo" && r.status === "done";
-                  return true;
-                })
-                .filter((r) => r.content.toLowerCase().includes(query.trim().toLowerCase()))
-                .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
-                .map((record) => {
+              compactRecords.map((record) => {
                   const isDone = record.type === "todo" && record.status === "done";
                   const isOverdue = record.type === "todo" && record.status === "pending" && record.rolledOverFromDate;
 
@@ -617,31 +539,20 @@ function App() {
                       <div className="record-main">
                         <span className="record-type">{record.type === "todo" ? "To do" : "记录"}</span>
                         {isOverdue ? <span className="overdue-label">来自 {record.rolledOverFromDate}</span> : null}
-                        {editingId === record.id ? (
-                          <textarea
-                            className="edit-input"
-                            onChange={(event) => setEditingContent(event.target.value)}
-                            rows={2}
-                            value={editingContent}
-                          />
-                        ) : (
-                          <>
-                            <p>{record.content}</p>
-                            {isDone && record.completedAt ? (
-                              <time className="completed-time">
-                                {new Date(record.completedAt).toLocaleString("zh-CN", {
-                                  month: "numeric",
-                                  day: "numeric",
-                                  hour: "2-digit",
-                                  minute: "2-digit",
-                                })}
-                              </time>
-                            ) : null}
-                          </>
-                        )}
+                        <p>{record.content}</p>
+                        {isDone && record.completedAt ? (
+                          <time className="completed-time">
+                            {new Date(record.completedAt).toLocaleString("zh-CN", {
+                              month: "numeric",
+                              day: "numeric",
+                              hour: "2-digit",
+                              minute: "2-digit",
+                            })}
+                          </time>
+                        ) : null}
                       </div>
-                      <div className="record-actions">
-                        {record.type === "todo" ? (
+                      {record.type === "todo" ? (
+                        <div className="record-actions">
                           <button
                             aria-label={isDone ? "标记为未完成" : "标记为完成"}
                             className={`check-action ${isDone ? "checked" : ""}`}
@@ -650,20 +561,8 @@ function App() {
                           >
                             ✓
                           </button>
-                        ) : null}
-                        {editingId === record.id ? (
-                          <button onClick={() => saveEditing(record.id)} type="button">
-                            保存
-                          </button>
-                        ) : (
-                          <button onClick={() => startEditing(record)} type="button">
-                            编辑
-                          </button>
-                        )}
-                        <button className="danger-action" onClick={() => deleteRecord(record.id)} type="button">
-                          删除
-                        </button>
-                      </div>
+                        </div>
+                      ) : null}
                     </article>
                   );
                 })

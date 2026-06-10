@@ -2,7 +2,7 @@
 
 ![FrostNote icon](src/assets/frostnote-icon.png)
 
-FrostNote 是一个面向 Windows 的轻量桌面便签应用，用来快速记录 FreeNote 和 To do 事项。它采用白色与天蓝色毛玻璃风格，支持按日期归类、本地 SQLite 持久化、逾期待办自动滚动、系统托盘和全局快捷键。
+FrostNote（霜笺）是一个面向 Windows 的轻量桌面便签应用，用来快速记录 FreeNote 和 To do 事项。它采用白色与天蓝色毛玻璃风格，支持按日期归类、本地 SQLite 持久化、逾期待办自动滚动、系统托盘和全局快捷键。
 
 ## 功能特性
 
