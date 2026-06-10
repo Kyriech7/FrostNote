@@ -28,6 +28,70 @@ struct RecordItem {
 struct DbState(Mutex<Connection>);
 struct CompactState(Arc<AtomicBool>);
 
+fn normalize_todo_statuses(conn: &Connection) -> rusqlite::Result<usize> {
+    conn.execute(
+        "UPDATE records
+         SET status = CASE
+             WHEN completed_at IS NOT NULL THEN 'done'
+             ELSE 'pending'
+         END
+         WHERE type='todo' AND (status IS NULL OR status NOT IN ('pending', 'done'))",
+        [],
+    )
+}
+
+fn next_todo_status(current_status: Option<&str>) -> (Option<String>, Option<String>) {
+    match current_status {
+        Some("done") => (Some("pending".to_string()), None),
+        _ => (
+            Some("done".to_string()),
+            Some(chrono::Utc::now().to_rfc3339()),
+        ),
+    }
+}
+
+fn rollover_overdue_todos(conn: &Connection, today: &str) -> rusqlite::Result<usize> {
+    #[derive(Debug)]
+    struct OverdueInfo {
+        id: String,
+        rolled_over_from_date: Option<String>,
+        original_date: String,
+    }
+
+    let overdue = {
+        let mut stmt = conn.prepare(
+            "SELECT id, rolled_over_from_date, date FROM records
+             WHERE type='todo'
+               AND (status='pending' OR (status IS NULL AND completed_at IS NULL))
+               AND date < ?1",
+        )?;
+
+        let rows = stmt.query_map(params![today], |row| {
+            Ok(OverdueInfo {
+                id: row.get(0)?,
+                rolled_over_from_date: row.get(1)?,
+                original_date: row.get(2)?,
+            })
+        })?;
+        rows.collect::<Result<Vec<_>, _>>()?
+    };
+
+    let now = chrono::Utc::now().to_rfc3339();
+    let mut updated = 0;
+    for item in &overdue {
+        let rolled_from = item
+            .rolled_over_from_date
+            .as_deref()
+            .unwrap_or(&item.original_date);
+        updated += conn.execute(
+            "UPDATE records SET date=?1, status='pending', rolled_over_from_date=?2, updated_at=?3 WHERE id=?4",
+            params![today, rolled_from, now, item.id],
+        )?;
+    }
+
+    Ok(updated)
+}
+
 fn init_db(app_data_dir: &std::path::Path) -> Connection {
     std::fs::create_dir_all(app_data_dir).ok();
     let db_path = app_data_dir.join("frostnote.db");
@@ -50,6 +114,7 @@ fn init_db(app_data_dir: &std::path::Path) -> Connection {
 
     // Enable WAL mode for better concurrent access
     conn.execute_batch("PRAGMA journal_mode=WAL;").ok();
+    normalize_todo_statuses(&conn).expect("Failed to normalize todo statuses");
 
     conn
 }
@@ -147,10 +212,7 @@ fn toggle_todo(db: State<'_, DbState>, id: String) -> Result<(), String> {
         )
         .ok();
 
-    let (new_status, completed_at) = match current_status.as_deref() {
-        Some("done") => (None::<String>, None::<String>),
-        _ => (Some("done".to_string()), Some(chrono::Utc::now().to_rfc3339())),
-    };
+    let (new_status, completed_at) = next_todo_status(current_status.as_deref());
 
     let now = chrono::Utc::now().to_rfc3339();
     conn.execute(
@@ -164,52 +226,9 @@ fn toggle_todo(db: State<'_, DbState>, id: String) -> Result<(), String> {
 
 #[tauri::command]
 fn rollover_todos(db: State<'_, DbState>, today: String) -> Result<Vec<RecordItem>, String> {
-    #[derive(Debug)]
-    struct OverdueInfo {
-        id: String,
-        rolled_over_from_date: Option<String>,
-        original_date: String,
-    }
-
-    let overdue = {
+    {
         let conn = db.0.lock().map_err(|e| e.to_string())?;
-        let mut stmt = conn
-            .prepare(
-                "SELECT id, rolled_over_from_date, date FROM records
-                 WHERE type='todo' AND status='pending' AND date < ?1",
-            )
-            .map_err(|e| e.to_string())?;
-
-        let overdue: Vec<OverdueInfo> = stmt
-            .query_map(params![today], |row| {
-                Ok(OverdueInfo {
-                    id: row.get(0)?,
-                    rolled_over_from_date: row.get(1)?,
-                    original_date: row.get(2)?,
-                })
-            })
-            .map_err(|e| e.to_string())?
-            .filter_map(|r| r.ok())
-            .collect();
-        // stmt and conn are dropped here, releasing the lock
-        overdue
-    };
-
-    // Update each overdue todo in a new lock scope
-    if !overdue.is_empty() {
-        let conn = db.0.lock().map_err(|e| e.to_string())?;
-        let now = chrono::Utc::now().to_rfc3339();
-        for item in &overdue {
-            let rolled_from = item
-                .rolled_over_from_date
-                .as_deref()
-                .unwrap_or(&item.original_date);
-            conn.execute(
-                "UPDATE records SET date=?1, rolled_over_from_date=?2, updated_at=?3 WHERE id=?4",
-                params![today, rolled_from, now, item.id],
-            )
-            .map_err(|e| e.to_string())?;
-        }
+        rollover_overdue_todos(&conn, &today).map_err(|e| e.to_string())?;
     }
 
     get_all_records(db)
@@ -236,6 +255,7 @@ fn migrate_records(db: State<'_, DbState>, records: Vec<RecordItem>) -> Result<(
         )
         .map_err(|e| e.to_string())?;
     }
+    normalize_todo_statuses(&conn).map_err(|e| e.to_string())?;
     Ok(())
 }
 
@@ -468,4 +488,88 @@ fn restore_mode(
     window.set_always_on_top(false).map_err(|e| e.to_string())?;
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn test_db() -> Connection {
+        let conn = Connection::open_in_memory().expect("open in-memory database");
+        conn.execute_batch(
+            "CREATE TABLE records (
+                id          TEXT PRIMARY KEY,
+                type        TEXT NOT NULL,
+                content     TEXT NOT NULL,
+                date        TEXT NOT NULL,
+                status      TEXT,
+                created_at  TEXT NOT NULL,
+                updated_at  TEXT NOT NULL,
+                completed_at TEXT,
+                rolled_over_from_date TEXT
+            );",
+        )
+        .expect("create records table");
+        conn
+    }
+
+    fn insert_todo(
+        conn: &Connection,
+        id: &str,
+        date: &str,
+        status: Option<&str>,
+        completed_at: Option<&str>,
+    ) {
+        conn.execute(
+            "INSERT INTO records (id, type, content, date, status, created_at, updated_at, completed_at, rolled_over_from_date)
+             VALUES (?1, 'todo', 'legacy todo', ?2, ?3, '2026-06-10T00:00:00Z', '2026-06-10T00:00:00Z', ?4, NULL)",
+            params![id, date, status, completed_at],
+        )
+        .expect("insert todo");
+    }
+
+    #[test]
+    fn toggling_done_returns_to_pending() {
+        let (status, completed_at) = next_todo_status(Some("done"));
+
+        assert_eq!(status.as_deref(), Some("pending"));
+        assert!(completed_at.is_none());
+    }
+
+    #[test]
+    fn normalizes_legacy_null_todo_status() {
+        let conn = test_db();
+        insert_todo(&conn, "legacy-null", "2026-06-10", None, None);
+
+        normalize_todo_statuses(&conn).expect("normalize todo statuses");
+
+        let status: String = conn
+            .query_row(
+                "SELECT status FROM records WHERE id='legacy-null'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("read status");
+        assert_eq!(status, "pending");
+    }
+
+    #[test]
+    fn rolls_over_legacy_null_pending_todo() {
+        let conn = test_db();
+        insert_todo(&conn, "legacy-overdue", "2026-06-10", None, None);
+
+        let updated = rollover_overdue_todos(&conn, "2026-06-11").expect("rollover todos");
+
+        assert_eq!(updated, 1);
+        let (date, status, rolled_over_from_date): (String, String, String) = conn
+            .query_row(
+                "SELECT date, status, rolled_over_from_date FROM records WHERE id='legacy-overdue'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .expect("read rolled todo");
+        assert_eq!(date, "2026-06-11");
+        assert_eq!(status, "pending");
+        assert_eq!(rolled_over_from_date, "2026-06-10");
+    }
 }

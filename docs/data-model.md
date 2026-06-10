@@ -10,7 +10,7 @@
 | `type` | `note` 或 `todo` | 记录类型 |
 | `content` | string | 单段文本内容 |
 | `date` | string | 归属日期，格式为 `YYYY-MM-DD` |
-| `status` | `pending` 或 `done` 或 null | to do 状态，普通记录为空 |
+| `status` | `pending` 或 `done` 或 null | to do 状态；普通记录为空；to do 不应为空 |
 | `createdAt` | string | 创建时间，ISO 字符串 |
 | `updatedAt` | string | 更新时间，ISO 字符串 |
 | `completedAt` | string 或 null | 完成时间，仅 to do 使用 |
@@ -29,6 +29,8 @@
 - `type` 为 `todo`。
 - 新建时 `status` 为 `pending`。
 - 点击对勾后 `status` 变为 `done`。
+- 已完成事项再次点击对勾时，`status` 必须回到 `pending`，不能写入 null。
+- 历史数据中若存在 `type = todo` 且 `status` 为空，会在数据库初始化或旧数据导入后自动迁正为 `pending` 或 `done`。
 - 完成时写入 `completedAt`。
 - 完成事项保留在列表中，前端显示删除线。
 
@@ -41,7 +43,7 @@
 
 ## 逾期滚动规则
 
-应用启动时检查所有未完成 to do：
+应用启动或本地日期跨天时检查所有未完成 to do：
 
 - 条件：`type = todo`，`status = pending`，且 `date` 早于今天。
 - 操作：将 `date` 更新为今天。
@@ -59,4 +61,3 @@
   - to do
   - 未完成
   - 已完成
-

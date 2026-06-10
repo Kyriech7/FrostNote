@@ -82,7 +82,7 @@ function runWindowCommand(command: "minimize_window" | "toggle_maximize_window" 
 }
 
 function App() {
-  const today = useMemo(() => formatDate(new Date()), []);
+  const [today, setToday] = useState(() => formatDate(new Date()));
   const [selectedDate, setSelectedDate] = useState(today);
   const [records, setRecords] = useState<RecordItem[]>([]);
   const [loading, setLoading] = useState(true);
@@ -95,6 +95,7 @@ function App() {
   const [editingContent, setEditingContent] = useState("");
   const [compactMode, setCompactMode] = useState(false);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  const todayRef = useRef(today);
 
   // Load records on mount: migrate from localStorage, then fetch from SQLite
   useEffect(() => {
@@ -115,6 +116,21 @@ function App() {
       cancelled = true;
     };
   }, [today]);
+
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      const nextToday = formatDate(new Date());
+      const previousToday = todayRef.current;
+      if (nextToday === previousToday) return;
+
+      todayRef.current = nextToday;
+      setToday(nextToday);
+      setSelectedDate((current) => (current === previousToday ? nextToday : current));
+      setEntryDate((current) => (current === previousToday ? nextToday : current));
+    }, 60_000);
+
+    return () => window.clearInterval(timer);
+  }, []);
 
   useEffect(() => {
     setEntryDate(selectedDate);
