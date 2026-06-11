@@ -1,23 +1,14 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import ReactDOM from "react-dom/client";
 import { invoke } from "@tauri-apps/api/core";
+import type { User } from "@supabase/supabase-js";
+import { isCloudConfigured, supabase } from "./cloud/supabaseClient";
+import { syncRecords, type RecordItem, type RecordType } from "./cloud/sync";
 import "./styles.css";
 
-type RecordType = "note" | "todo";
-type TodoStatus = "pending" | "done";
 type FilterMode = "all" | "note" | "todo" | "pending" | "done";
-
-type RecordItem = {
-  id: string;
-  type: RecordType;
-  content: string;
-  date: string;
-  status: TodoStatus | null;
-  createdAt: string;
-  updatedAt: string;
-  completedAt: string | null;
-  rolledOverFromDate: string | null;
-};
+type AuthMode = "login" | "signup";
+type SyncStatus = "local" | "idle" | "syncing" | "synced" | "error";
 
 const STORAGE_KEY = "label-notes.records.v1";
 
@@ -66,7 +57,8 @@ async function migrateLocalStorage(): Promise<boolean> {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (!raw) return false;
 
-    const parsed = JSON.parse(raw) as RecordItem[];
+    const parsed = (JSON.parse(raw) as Array<Omit<RecordItem, "deletedAt"> & Partial<Pick<RecordItem, "deletedAt">>>)
+      .map((record) => ({ ...record, deletedAt: record.deletedAt ?? null }));
     if (parsed.length === 0) return false;
 
     await invoke("migrate_records", { records: parsed });
@@ -94,8 +86,45 @@ function App() {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editingContent, setEditingContent] = useState("");
   const [compactMode, setCompactMode] = useState(false);
+  const [user, setUser] = useState<User | null>(null);
+  const [authMode, setAuthMode] = useState<AuthMode>("login");
+  const [authEmail, setAuthEmail] = useState("");
+  const [authPassword, setAuthPassword] = useState("");
+  const [authCustomUid, setAuthCustomUid] = useState("");
+  const [authCustomUidMessage, setAuthCustomUidMessage] = useState("");
+  const [authMessage, setAuthMessage] = useState("");
+  const [syncStatus, setSyncStatus] = useState<SyncStatus>(isCloudConfigured ? "idle" : "local");
+  const [syncMessage, setSyncMessage] = useState(isCloudConfigured ? "本地模式" : "云同步未配置");
+  const [lastSyncedAt, setLastSyncedAt] = useState<string | null>(null);
+  const [syncVersion, setSyncVersion] = useState(0);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const todayRef = useRef(today);
+
+  const requestCloudSync = useCallback(() => {
+    setSyncVersion((version) => version + 1);
+  }, []);
+
+  const runCloudSync = useCallback(async function runCloudSync() {
+    if (!supabase || !user) {
+      setSyncStatus(isCloudConfigured ? "idle" : "local");
+      return;
+    }
+
+    setSyncStatus("syncing");
+    setSyncMessage("同步中...");
+    try {
+      const customUid = (user.user_metadata?.custom_uid as string | undefined) ?? user.id;
+      const result = await syncRecords(supabase, customUid, today);
+      setRecords(result.records);
+      setLastSyncedAt(result.syncedAt);
+      setSyncStatus("synced");
+      setSyncMessage("已同步");
+    } catch (error) {
+      console.error("Failed to sync records:", error);
+      setSyncStatus("error");
+      setSyncMessage("同步失败，可稍后重试");
+    }
+  }, [today, user]);
 
   // Load records on mount: migrate from localStorage, then fetch from SQLite
   useEffect(() => {
@@ -116,6 +145,40 @@ function App() {
       cancelled = true;
     };
   }, [today]);
+
+  useEffect(() => {
+    if (!supabase) return;
+
+    let cancelled = false;
+    supabase.auth.getSession().then(({ data }) => {
+      if (!cancelled) setUser(data.session?.user ?? null);
+    });
+
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange((_event, session) => {
+      setUser(session?.user ?? null);
+    });
+
+    return () => {
+      cancelled = true;
+      subscription.unsubscribe();
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!user) {
+      setSyncStatus(isCloudConfigured ? "idle" : "local");
+      return;
+    }
+
+    void runCloudSync();
+  }, [runCloudSync, user]);
+
+  useEffect(() => {
+    if (!user || syncVersion === 0) return;
+    void runCloudSync();
+  }, [runCloudSync, syncVersion, user]);
 
   useEffect(() => {
     const timer = window.setInterval(() => {
@@ -184,7 +247,8 @@ function App() {
       await invoke("delete_record", { id }).catch((e) => console.error(e));
     }
     setRecords((current) => current.filter((r) => !doneIds.includes(r.id)));
-  }, [todayTodos]);
+    requestCloudSync();
+  }, [requestCloudSync, todayTodos]);
 
   const addRecord = useCallback(
     async function addRecord(event: React.FormEvent<HTMLFormElement>) {
@@ -206,6 +270,7 @@ function App() {
         updatedAt: now,
         completedAt: null,
         rolledOverFromDate: null,
+        deletedAt: null,
       };
 
       try {
@@ -214,11 +279,12 @@ function App() {
         setContent("");
         setSelectedDate(entryDate);
         inputRef.current?.focus();
+        requestCloudSync();
       } catch (error) {
         console.error("Failed to add record:", error);
       }
     },
-    [content, recordType, entryDate],
+    [content, recordType, entryDate, requestCloudSync],
   );
 
   const toggleTodo = useCallback(async function toggleTodo(record: RecordItem) {
@@ -228,19 +294,21 @@ function App() {
       const today = formatDate(new Date());
       const updated = await loadRecords(today);
       setRecords(updated);
+      requestCloudSync();
     } catch (error) {
       console.error("Failed to toggle todo:", error);
     }
-  }, []);
+  }, [requestCloudSync]);
 
   const deleteRecord = useCallback(async function deleteRecord(id: string) {
     try {
       await invoke("delete_record", { id });
       setRecords((current) => current.filter((item) => item.id !== id));
+      requestCloudSync();
     } catch (error) {
       console.error("Failed to delete record:", error);
     }
-  }, []);
+  }, [requestCloudSync]);
 
   const saveEditing = useCallback(
     async function saveEditing(id: string) {
@@ -264,8 +332,9 @@ function App() {
 
       setEditingId(null);
       setEditingContent("");
+      requestCloudSync();
     },
-    [editingContent],
+    [editingContent, requestCloudSync],
   );
 
   function startEditing(record: RecordItem) {
@@ -282,6 +351,79 @@ function App() {
       await invoke("restore_mode");
     }
   }
+
+  async function handleAuthSubmit(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!supabase) {
+      setAuthMessage("请先配置 Supabase 环境变量");
+      return;
+    }
+
+    const email = authEmail.trim();
+    if (!email || authPassword.length < 6) {
+      setAuthMessage("请输入邮箱和至少 6 位密码");
+      return;
+    }
+
+    if (authMode === "signup") {
+      const customUid = authCustomUid.trim();
+      const CUSTOM_UID_RE = /^[a-zA-Z0-9_-]{3,30}$/;
+      if (!CUSTOM_UID_RE.test(customUid)) {
+        setAuthCustomUidMessage("用户名需 3-30 位，仅限字母、数字、- 和 _");
+        return;
+      }
+      setAuthCustomUidMessage("");
+      setAuthMessage("检查用户名可用性...");
+      const { data: available, error: checkError } = await supabase
+        .rpc("check_custom_uid_available", { uid: customUid });
+      if (checkError || !available) {
+        setAuthMessage("");
+        setAuthCustomUidMessage("该用户名已被使用，请换一个");
+        return;
+      }
+    }
+
+    setAuthMessage(authMode === "login" ? "登录中..." : "注册中...");
+    setAuthCustomUidMessage("");
+    const result =
+      authMode === "login"
+        ? await supabase.auth.signInWithPassword({ email, password: authPassword })
+        : await supabase.auth.signUp({
+            email,
+            password: authPassword,
+            options: {
+              data: { custom_uid: authCustomUid.trim() },
+            },
+          });
+
+    if (result.error) {
+      setAuthMessage(result.error.message);
+      return;
+    }
+
+    setAuthPassword("");
+    setAuthCustomUid("");
+    setAuthMessage(authMode === "login" ? "已登录" : "账号已创建");
+  }
+
+  async function handleSignOut() {
+    if (!supabase) return;
+    await supabase.auth.signOut();
+    setUser(null);
+    setSyncStatus("idle");
+    setSyncMessage("本地模式");
+  }
+
+  const syncStatusText =
+    syncStatus === "syncing"
+      ? "同步中"
+      : syncStatus === "synced"
+        ? "已同步"
+        : syncStatus === "error"
+          ? "同步失败"
+          : syncStatus === "local"
+            ? "仅本地"
+            : "未登录";
 
   if (loading) {
     return (
@@ -328,6 +470,88 @@ function App() {
                 <h1>FrostNote</h1>
               </div>
             </div>
+
+            <section className="cloud-panel" aria-label="云同步">
+              <div className="cloud-panel-header">
+                <span className={`sync-dot ${syncStatus}`} aria-hidden="true" />
+                <span>{syncStatusText}</span>
+                {user ? (
+                  <span className="cloud-copy">
+                    {syncMessage}
+                    {lastSyncedAt ? ` · ${new Date(lastSyncedAt).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" })}` : ""}
+                  </span>
+                ) : null}
+              </div>
+              {!isCloudConfigured ? (
+                <p className="cloud-copy">当前记录仅保存在本机。</p>
+              ) : user ? (
+                <>
+                  <div className="cloud-user-row">
+                    <p className="cloud-user" title={user.email ?? ""}>
+                      @{(user.user_metadata?.custom_uid as string | undefined) ?? user.id.slice(0, 8)}
+                    </p>
+                    <div className="cloud-actions">
+                      <button onClick={runCloudSync} type="button" disabled={syncStatus === "syncing"}>
+                        同步
+                      </button>
+                      <button onClick={handleSignOut} type="button">
+                        退出
+                      </button>
+                    </div>
+                  </div>
+                </>
+              ) : (
+                <form className="auth-form" onSubmit={handleAuthSubmit}>
+                  <div className="auth-tabs" aria-label="账号操作">
+                    <button
+                      className={authMode === "login" ? "selected" : ""}
+                      onClick={() => setAuthMode("login")}
+                      type="button"
+                    >
+                      登录
+                    </button>
+                    <button
+                      className={authMode === "signup" ? "selected" : ""}
+                      onClick={() => setAuthMode("signup")}
+                      type="button"
+                    >
+                      注册
+                    </button>
+                  </div>
+                  <input
+                    aria-label="邮箱"
+                    autoComplete="email"
+                    onChange={(event) => setAuthEmail(event.target.value)}
+                    placeholder="邮箱"
+                    type="email"
+                    value={authEmail}
+                  />
+                  {authMode === "signup" ? (
+                    <input
+                      aria-label="用户名"
+                      autoComplete="username"
+                      onChange={(event) => setAuthCustomUid(event.target.value)}
+                      placeholder="用户名（3-30位字母、数字、- 和 _）"
+                      type="text"
+                      value={authCustomUid}
+                    />
+                  ) : null}
+                  {authCustomUidMessage ? <p className="auth-message">{authCustomUidMessage}</p> : null}
+                  <input
+                    aria-label="密码"
+                    autoComplete={authMode === "login" ? "current-password" : "new-password"}
+                    onChange={(event) => setAuthPassword(event.target.value)}
+                    placeholder="密码"
+                    type="password"
+                    value={authPassword}
+                  />
+                  <button className="auth-submit" type="submit">
+                    {authMode === "login" ? "登录同步" : "创建账号"}
+                  </button>
+                  {authMessage ? <p className="auth-message">{authMessage}</p> : null}
+                </form>
+              )}
+            </section>
 
             <nav className="date-list" aria-label="最近日期">
               {dateOptions.length > 0 ? (
@@ -471,8 +695,20 @@ function App() {
                     return (
                       <article className={`record-card ${isDone ? "done" : ""} ${isOverdue ? "overdue" : ""}`} key={record.id}>
                         <div className="record-main">
-                          <span className="record-type">{record.type === "todo" ? "To do" : "记录"}</span>
-                          {isOverdue ? <span className="overdue-label">来自 {record.rolledOverFromDate}</span> : null}
+                          <div className="record-meta">
+                            <span className="record-type">{record.type === "todo" ? "To do" : "记录"}</span>
+                            {isDone && record.completedAt ? (
+                              <time className="completed-time">
+                                {new Date(record.completedAt).toLocaleString("zh-CN", {
+                                  month: "numeric",
+                                  day: "numeric",
+                                  hour: "2-digit",
+                                  minute: "2-digit",
+                                })}
+                              </time>
+                            ) : null}
+                            {isOverdue ? <span className="overdue-label">来自 {record.rolledOverFromDate}</span> : null}
+                          </div>
                           {editingId === record.id ? (
                             <textarea
                               className="edit-input"
@@ -483,16 +719,6 @@ function App() {
                           ) : (
                             <>
                               <p>{record.content}</p>
-                              {isDone && record.completedAt ? (
-                                <time className="completed-time">
-                                  {new Date(record.completedAt).toLocaleString("zh-CN", {
-                                    month: "numeric",
-                                    day: "numeric",
-                                    hour: "2-digit",
-                                    minute: "2-digit",
-                                  })}
-                                </time>
-                              ) : null}
                             </>
                           )}
                         </div>
@@ -553,19 +779,21 @@ function App() {
                   return (
                     <article className={`record-card ${isDone ? "done" : ""} ${isOverdue ? "overdue" : ""}`} key={record.id}>
                       <div className="record-main">
-                        <span className="record-type">{record.type === "todo" ? "To do" : "记录"}</span>
-                        {isOverdue ? <span className="overdue-label">来自 {record.rolledOverFromDate}</span> : null}
+                        <div className="record-meta compact-record-meta">
+                          <span className="record-type">{record.type === "todo" ? "To do" : "记录"}</span>
+                          {isDone && record.completedAt ? (
+                            <time className="completed-time compact-completed-time">
+                              {new Date(record.completedAt).toLocaleString("zh-CN", {
+                                month: "numeric",
+                                day: "numeric",
+                                hour: "2-digit",
+                                minute: "2-digit",
+                              })}
+                            </time>
+                          ) : null}
+                          {isOverdue ? <span className="overdue-label">来自 {record.rolledOverFromDate}</span> : null}
+                        </div>
                         <p>{record.content}</p>
-                        {isDone && record.completedAt ? (
-                          <time className="completed-time">
-                            {new Date(record.completedAt).toLocaleString("zh-CN", {
-                              month: "numeric",
-                              day: "numeric",
-                              hour: "2-digit",
-                              minute: "2-digit",
-                            })}
-                          </time>
-                        ) : null}
                       </div>
                       {record.type === "todo" ? (
                         <div className="record-actions">

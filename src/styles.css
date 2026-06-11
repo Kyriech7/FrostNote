@@ -151,6 +151,136 @@ button {
   font-size: 12px;
 }
 
+.cloud-panel {
+  display: grid;
+  gap: 8px;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  padding: 11px;
+  background: rgba(255, 255, 255, 0.28);
+  backdrop-filter: blur(22px) saturate(1.2);
+}
+
+.cloud-panel-header,
+.cloud-actions,
+.auth-tabs {
+  display: flex;
+  align-items: center;
+}
+
+.cloud-panel-header {
+  gap: 7px;
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.cloud-panel-header .cloud-copy {
+  margin-left: auto;
+  font-weight: 400;
+}
+
+.sync-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: var(--muted);
+}
+
+.sync-dot.synced {
+  background: var(--aqua);
+}
+
+.sync-dot.syncing {
+  background: var(--sky);
+}
+
+.sync-dot.error {
+  background: var(--red);
+}
+
+.cloud-copy,
+.cloud-user,
+.auth-message {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.cloud-user {
+  overflow: hidden;
+  color: var(--ink);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cloud-actions {
+  gap: 7px;
+}
+
+.cloud-user-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.cloud-user-row .cloud-user {
+  flex: 1;
+  min-width: 0;
+}
+
+.cloud-actions button,
+.auth-tabs button,
+.auth-submit {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 6px 9px;
+  color: var(--ink);
+  background: rgba(255, 255, 255, 0.5);
+}
+
+.cloud-actions button:disabled {
+  cursor: default;
+  opacity: 0.58;
+}
+
+.auth-form {
+  display: grid;
+  gap: 7px;
+}
+
+.auth-tabs {
+  gap: 5px;
+  padding: 3px;
+  border-radius: 12px;
+  background: rgba(126, 211, 255, 0.16);
+}
+
+.auth-tabs button {
+  flex: 1;
+  padding: 5px 8px;
+  font-size: 12px;
+}
+
+.auth-tabs button.selected,
+.auth-submit {
+  color: #ffffff;
+  background: var(--sky-deep);
+}
+
+.auth-form input {
+  width: 100%;
+  min-height: 32px;
+  border: 1px solid var(--line);
+  border-radius: 11px;
+  padding: 0 9px;
+  color: var(--ink);
+  background: rgba(255, 255, 255, 0.56);
+  outline: none;
+  font-size: 12px;
+}
+
 .eyebrow {
   margin: 0;
   color: var(--muted);
@@ -440,6 +570,20 @@ h2 {
   background: rgba(215, 51, 51, 0.1);
 }
 
+.record-meta {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 10px;
+}
+
+.record-meta .record-type,
+.record-meta .overdue-label,
+.record-meta .completed-time {
+  margin: 0;
+}
+
 .record-main p {
   margin-bottom: 0;
   white-space: pre-wrap;
@@ -479,6 +623,13 @@ h2 {
   margin-top: 4px;
   color: var(--muted);
   font-size: 11px;
+}
+
+.record-meta .completed-time {
+  display: inline-flex;
+  align-items: center;
+  line-height: 1;
+  white-space: nowrap;
 }
 
 .clear-done {
@@ -610,9 +761,26 @@ h2 {
 }
 
 .compact-records .record-card {
-  padding: 10px 12px;
+  display: flex;
+  align-items: center;
+  padding: 10px 12px 10px 14px;
   border-radius: 14px;
   gap: 10px;
+}
+
+.compact-records .record-main {
+  flex: 1;
+  min-width: 0;
+}
+
+.compact-records .record-actions {
+  flex-shrink: 0;
+  margin-right: 2px;
+}
+
+.compact-records .record-meta {
+  gap: 5px;
+  margin-bottom: 6px;
 }
 
 .compact-records .record-card p {
@@ -623,7 +791,17 @@ h2 {
 .compact-records .overdue-label {
   font-size: 11px;
   padding: 3px 7px;
-  margin-bottom: 6px;
+  margin-bottom: 0;
+}
+
+.compact-records .compact-completed-time {
+  display: inline-flex;
+  align-items: center;
+  margin: 0;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1;
+  white-space: nowrap;
 }
 
 .compact-records .record-actions button {
@@ -675,4 +853,35 @@ h2 {
   .record-actions {
     flex-wrap: wrap;
   }
+}
+
+.app-shell.compact .compact-records .record-card {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+}
+
+.app-shell.compact .compact-records .record-main {
+  justify-self: stretch;
+  width: 100%;
+  min-width: 0;
+  text-align: left;
+}
+
+.app-shell.compact .compact-records .record-main p {
+  overflow-wrap: anywhere;
+}
+
+.app-shell.compact .compact-records .record-actions {
+  justify-self: end;
+  align-self: center;
+  flex-wrap: nowrap;
+  margin: 0;
+}
+
+.app-shell.compact .compact-records .record-actions .check-action {
+  width: 28px !important;
+  min-width: 28px !important;
+  height: 28px !important;
 }

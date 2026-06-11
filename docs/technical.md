@@ -7,13 +7,14 @@
 - 开发语言：TypeScript
 - 构建工具：Vite
 - 本地数据：优先使用 SQLite
+- 云同步：Supabase Auth + Postgres + RLS
 - 目标系统：Windows
 
 ## 架构原则
 
 - 前端负责界面、交互、搜索筛选和用户输入状态。
 - Tauri 后端负责本地数据读写、托盘、全局快捷键和窗口行为。
-- 数据只保存在本机，不依赖账号或网络。
+- 数据以本机 SQLite 为主；账号和云同步是可选能力，未登录或断网时不影响本地使用。
 - 每个开发阶段都应保持应用可启动、可验证。
 
 ## 模块划分
@@ -26,6 +27,8 @@
 - 类型筛选和搜索。
 - to do 完成按钮与状态显示。
 - 白色和天蓝色毛玻璃主题样式。
+- Supabase 登录状态和同步状态。
+- 自动同步和手动同步触发。
 
 ### 后端模块
 
@@ -35,12 +38,23 @@
 - 系统托盘。
 - 全局快捷键。
 - 关闭窗口时最小化到托盘。
+- 同步所需的软删除、本地同步状态和远端记录合并。
 
 ## 本地存储
 
-第一版使用本地 SQLite。数据文件放在 Tauri 推荐的应用数据目录中，避免直接写入项目目录。
+第一版使用本地 SQLite。数据文件放在 Tauri 推荐的应用数据目录中，避免直接写入项目目录。云同步阶段继续保留 SQLite 作为主数据源，Supabase 只作为登录后的云端副本和多设备恢复来源。
 
 当前可点击原型阶段先使用 WebView `localStorage` 保存记录，键名为 `label-notes.records.v1`。这让应用在 SQLite 接入前也能完成新增、编辑、删除、完成状态、搜索筛选和基础持久化；Phase 2 会把该临时存储迁移到 Tauri 后端的 SQLite 数据层。
+
+## 云同步
+
+- Supabase 配置通过 Vite 环境变量读取：`VITE_SUPABASE_URL`、`VITE_SUPABASE_PUBLISHABLE_KEY`。
+- 真实 `.env` 或 `.env.local` 不提交到 Git。
+- 云端 schema 和 RLS 初始化 SQL 位于 `docs/supabase-schema.sql`。
+- Supabase 项目设置步骤位于 `docs/supabase-setup.md`。
+- 登录方式为邮箱密码，云同步第一版关闭邮箱验证。
+- 本地记录和云端记录通过相同 `id` 合并；同一记录冲突时，`updatedAt` 较新的版本胜出。
+- 删除使用 `deletedAt` 软删除 tombstone，同步完成后 UI 继续隐藏已删除记录。
 
 ## 编码注意事项
 

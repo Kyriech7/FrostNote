@@ -23,9 +23,10 @@
   - 更新 `.gitignore`，忽略 `.env`、`.env.local`。
 - 新增云端 `records` 表：
   - 字段沿用本地模型：`id`、`type`、`content`、`date`、`status`、`created_at`、`updated_at`、`completed_at`、`rolled_over_from_date`。
-  - 新增 `user_id uuid`，关联 `auth.users(id)`。
+  - 新增 `user_id text`，使用用户注册时选择的自定义 UID，关联 `public.profiles(custom_uid)`。
+  - 新增 `public.profiles` 表，通过 `on_auth_user_created` 触发器自动填充。
   - 新增 `deleted_at` 支持软删除同步。
-  - 启用 RLS，只允许用户读写自己的记录。
+  - 启用 RLS，通过 `public.get_my_custom_uid()` 函数解析当前用户的自定义 UID。
 - 本地 SQLite 增加：
   - `deleted_at TEXT`
   - `sync_status TEXT NOT NULL DEFAULT 'dirty'`
@@ -78,6 +79,8 @@
 ## Assumptions
 
 - 第一版只服务 FrostNote 桌面端，不做网页端和开放网络 API。
+- 用户注册时选择自定义 UID（3-30 位字母数字），用作云端数据隔离标识。
+- 自定义 UID 全局唯一，由 `profiles.custom_uid` 唯一约束和注册前 RPC 检查确保。
 - Supabase 项目尚未创建，实施时需要创建项目并执行 SQL。
 - 不提交真实 `.env.local`。
 - 邮箱验证先关闭；未来公开发布前可再补深链接或邮件确认流程。
